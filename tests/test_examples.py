@@ -20,10 +20,8 @@ from cwltool.utils import onWindows
 from cwltool.resolver import Path
 from cwltool.process import CWL_IANA
 
-from .util import (get_data, get_main_output, get_windows_safe_factory, needs_docker,
-                   needs_singularity, temp_dir, windows_needs_docker)
-
-
+from .util import (get_data, get_main_output, get_windows_safe_factory,
+                   needs_docker, temp_dir, windows_needs_docker)
 try:
     reload
 except:  # pylint: disable=bare-except
@@ -711,6 +709,46 @@ def test_record_container_id():
         assert error_code == 0
         assert len(os.listdir(cid_dir)) == 2
 
+@needs_docker
+def test_record_container_id_file_instead_of_dir(tmpdir):
+    test_file = "cache_test_workflow.cwl"
+    bad_cidfile_dir = tmpdir.ensure("cidfile-dir-actually-a-file")
+    error_code, _, stderr = get_main_output(
+        ["--record-container-id", "--cidfile-dir", bad_cidfile_dir,
+         get_data("tests/wf/" + test_file)])
+    assert "is not a directory, please check it first" in stderr, stderr
+    assert error_code == 2
+    tmpdir.remove(ignore_errors=True)
+
+@needs_docker
+def test_record_container_id_nonexist_dir(tmpdir):
+    test_file = "cache_test_workflow.cwl"
+    bad_cidfile_dir = tmpdir.join("cidfile-dir-badpath")
+    error_code, _, stderr = get_main_output(
+        ["--record-container-id", "--cidfile-dir", bad_cidfile_dir,
+         get_data("tests/wf/" + test_file)])
+    assert "directory doesn't exist, please create it first" in stderr, stderr
+    assert error_code == 2
+    tmpdir.remove(ignore_errors=True)
+
+@needs_docker
+def test_record_container_id_cwd(tmpdir):
+    test_file = "cache_test_workflow.cwl"
+    cwd = os.getcwd()
+    os.chdir(tmpdir)
+    try:
+        error_code, _, stderr = get_main_output(
+            ["--record-container-id", '--cidfile-prefix=pytestcid',
+             get_data("tests/wf/" + test_file)])
+    finally:
+        listing = tmpdir.listdir()
+        os.chdir(cwd)
+        cidfiles_count = sum(1 for _ in tmpdir.visit(fil="pytestcid*"))
+        tmpdir.remove(ignore_errors=True)
+    assert "completed success" in stderr
+    assert error_code == 0
+    assert cidfiles_count == 2, '{}/n{}'.format(listing, stderr)
+
 
 @needs_docker
 def test_wf_without_container():
@@ -765,3 +803,27 @@ def test_no_compute_checksum():
     assert "completed success" in stderr
     assert error_code == 0
     assert "checksum" not in stdout
+
+def test_bad_userspace_runtime():
+    test_file = "tests/wf/wc-tool.cwl"
+    job_file = "tests/wf/wc-job.json"
+    error_code, stdout, stderr = get_main_output(
+        ["--user-space-docker-cmd=quaquioN", "--default-container=debian",
+         get_data(test_file), get_data(job_file)])
+    assert "'quaquioN' not found:" in stderr, stderr
+    assert error_code == 1
+
+def test_bad_basecommand():
+    test_file = "tests/wf/missing-tool.cwl"
+    error_code, stdout, stderr = get_main_output(
+        [get_data(test_file)])
+    assert "'neenooGo' not found" in stderr, stderr
+    assert error_code == 1
+
+@needs_docker
+def test_bad_basecommand_docker():
+    test_file = "tests/wf/missing-tool.cwl"
+    error_code, stdout, stderr = get_main_output(
+        ["--default-container", "debian", get_data(test_file)])
+    assert "permanentFail" in stderr, stderr
+    assert error_code == 1
